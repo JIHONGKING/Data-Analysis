@@ -1,0 +1,278 @@
+---
+title: "Draft"
+author: "Jihong Min"
+date: "2024-12-02"
+output: html_document
+---
+
+```{r setup, include=FALSE }
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+library(tidyverse)
+library(car)
+```
+
+# Data
+This analysis uses data from the Quarterly Census of Employment and Wages (QCEW) program for 2022-2023, analyzing a total of 1,652 industries in the Madison area. From the original dataset, we filtered to 4-digit NAICS codes, resulting in 271 observations for analysis.
+
+Data exclusion criteria included:
+
+* Removed 124 industries with zero or missing employment figures
+
+* Filtered out 86 incomplete wage records
+
+* Limited to 271 establishments within Madison Metropolitan Area
+
+
+```{r echo=FALSE}
+industry_tit = read_csv("Data/industry-titles.csv")
+area_tit = read_csv("Data/area-titles.csv")
+agg_level_tit = read_csv("Data/agg-level-titles-csv.csv")
+avg_2023 = read_csv("Data/Area2023_Wi.csv")
+avg_2022 = read_csv("Data/Area2022_Wi.csv")
+```
+
+
+
+
+# 1. Introduction
+Recent economic inequality and wage disparities have become major concerns for many communities. Madison, Wisconsin, in particular, is a city where various industries coexist, and understanding wage gaps between industries is crucial for developing regional economic policies and comprehending the labor market. These wage disparities significantly influence workers' career choices and professional development decisions, while also serving as important indicators for regional development strategies.
+
+This study aims to answer the following key question: "Is there a significant difference in average weekly wages among industries in the Madison area?" This question goes beyond simple wage comparisons, helping us understand the structural characteristics of the regional economy and the dynamics of the labor market.
+
+
+# 2. Background 
+
+The Quarterly Census of Employment and Wages (QCEW) program, maintained by the U.S. Bureau of Labor Statistics (BLS), provides data for the Madison Metropolitan Statistical Area through mandatory quarterly reports from employers participating in the Unemployment Insurance (UI) program. This dataset coverage is extensive, representing approximately 96% of civilian employment in the area.
+Our analysis uses 4-digit NAICS (North American Industry Classification System) codes, which provide an optimal balance between detail and clarity while avoiding data redundancy. The 4-digit codes represent industry groups, sitting between broader sectors (2-digit codes) and more detailed industry levels (5-6 digit codes).
+
+We categorized industries based on their weekly wages into three groups: 
+
+* Low wage (less than $1,000 per week)
+
+* Medium wage ($1,000 to $2,000 per week)
+
+* High wage (more than $2,000 per week)
+
+```{r echo=FALSE}
+wage_summary <- avg_2023 %>%
+  filter(
+    nchar(as.character(industry_code)) == 4,
+    annual_avg_wkly_wage > 0
+  ) %>%
+  mutate(
+    wage_category = factor(case_when(
+      annual_avg_wkly_wage < 1000 ~ "Low wage (<$1000)",
+      annual_avg_wkly_wage < 2000 ~ "Medium wage ($1000-$2000)",
+      TRUE ~ "High wage (>$2000)"
+    ), levels = c("Low wage (<$1000)", 
+                 "Medium wage ($1000-$2000)", 
+                 "High wage (>$2000)"))
+  )
+
+# Employment Distribution as a linear plot with smooth lines
+wage_summary %>%
+ group_by(wage_category) %>%
+ summarise(
+   mean_employment = mean(annual_avg_emplvl),
+   median_employment = median(annual_avg_emplvl)
+ ) %>%
+ ggplot(aes(x = wage_category, group = 1)) +
+
+  geom_smooth(aes(y = mean_employment, color = "Average"), 
+             se = FALSE, 
+             method = "loess") +
+ geom_point(aes(y = mean_employment, color = "Average"), size = 3) +
+ geom_text(aes(y = mean_employment, 
+               label = paste0(round(mean_employment, 0))), 
+           vjust = -0.5,
+           size = 3.5) +
+
+   geom_smooth(aes(y = median_employment, color = "Median"), 
+             se = FALSE, 
+             method = "loess") +
+ geom_point(aes(y = median_employment, color = "Median"), size = 3) +
+ geom_text(aes(y = median_employment, 
+               label = paste0(round(median_employment, 0))), 
+           vjust = 1.5,
+           size = 3.5) +
+ theme_minimal() +
+ labs(
+   title = "Average and Median Employment by Wage Category",
+   x = "",
+   y = "Number of Employees",
+   color = "Measure"
+ ) +
+ scale_y_continuous(
+   limits = c(0, 6000),
+   breaks = seq(0, 6000, by = 1000),
+   labels = scales::comma
+ ) +
+ scale_color_manual(values = c("Average" = "skyblue", "Median" = "darkblue")) 
+```
+
+The visualizations support our research question in two key ways. First, the linear plot demonstrates the systematic relationship between wage categories and employment levels, showing both average and median trends to capture the full distribution. Second, the histogram reveals the underlying employment distribution patterns within each wage category, highlighting important structural differences that inform our statistical analysis. These patterns suggest potential systematic differences in employment structures across wage categories, which we formally test in our statistical analysis.
+
+```{r echo=FALSE}
+# Employment Distribution by Wage Category as histogram
+ggplot(wage_summary, aes(annual_avg_emplvl, fill = wage_category)) +
+  geom_histogram(
+    color = "steelblue4",
+    alpha = 0.7,
+    position = "identity",
+    bins = 30
+  ) +
+  theme_minimal() +
+  labs(
+    title = "Employment Distribution by Wage Category",
+    x = "Number of Employees",
+    y = "Count of Industries",
+    fill = "Wage Category"
+  ) +
+  scale_x_continuous(
+    limits = c(0, 15000),
+    breaks = seq(0, 15000, by = 2500),
+    labels = scales::comma
+  ) +
+  theme(
+    plot.title = element_text(size = 14, face = "bold"),
+    legend.position = "top",
+    plot.margin = margin(t = 40, r = 40, b = 40, l = 40)
+  )
+```
+
+>The histogram further details the employment distribution within each wage category. It shows that while high-wage industries have higher average employment, they also show the most dispersed distribution, indicating greater variability in employment sizes. Medium-wage industries demonstrate a more concentrated distribution around lower employment levels, despite having a higher total count of industries. Low-wage industries show a similar pattern but with a smaller overall frequency.
+
+# 3. Statistical Analysis
+
+To analyze whether there are significant differences in employment levels across wage categories, we conducted a comprehensive statistical analysis using multiple inference methods. Our parameter of interest is μᵢ, representing the mean employment level for each wage category i (Low, Medium, High).
+
+Statistical Model
+Let Xᵢⱼ be the employment level in the j-th industry of wage category i, where i = 1 (low), 2 (medium), 3 (high). These are modeled as:
+
+Xᵢⱼ ~ F(μᵢ, σᵢ), j = 1,...,nᵢ
+
+where F represents some unknown distribution, μᵢ is the mean employment level, and σᵢ is the standard deviation for wage category i.
+
+**Primary Analysis**
+
+Hypotheses:
+
+H₀: μL = μM = μH (mean employment levels are equal across all wage categories)
+
+Hₐ: At least one mean employment level differs from the others
+  
+**1.Point Estimation** 
+
+Our point estimation shows that high-wage industries employ on average 2,481 more workers than low-wage industries. However, our statistical tests reveal that this difference, while economically meaningful, could be due to chance rather than representing a true systematic pattern in the Madison labor market. This finding has important implications for policy makers considering employment-based economic interventions. Looking at the specific numbers, we found that low wage categories show an average employment of 2,698 workers, medium wage categories demonstrate an average of 4,289 workers, and high wage categories exhibit the highest average at 5,179 workers.
+
+**2. Normality Assessment**
+
+```{r echo=FALSE}
+# QQ plots for normality check
+ggplot(wage_summary, aes(sample = annual_avg_emplvl)) +
+  geom_qq() +
+  geom_qq_line() +
+  facet_wrap(~wage_category) +
+  theme_minimal() +
+  labs(
+    title = "Normal Q-Q Plots by Wage Category",
+    x = "Theoretical Quantiles",
+    y = "Sample Quantiles"
+  ) +
+  theme(
+    plot.title = element_text(size = 14, face = "bold"),
+    strip.text = element_text(size = 10),
+    panel.grid.minor = element_blank()
+  )
+```
+
+The Q-Q plots and Shapiro-Wilk test results reveal significant deviations from normality across all wage categories (all p-values < 0.01), indicating violation of the normality assumption. All categories display substantial right-skewed distributions.
+
+**3. Variance Analysis**
+
+Levene's test results (F = 0.3892, p = 0.6784) demonstrate that the assumption of equal variances is met, as p > 0.05. The independence assumption is satisfied as observations represent different industries.
+
+**4. Distribution Visualization**
+
+```{r echo=FALSE}
+# Box plots for visualizing distributions
+ggplot(wage_summary, aes(x = wage_category, y = annual_avg_emplvl)) +
+  geom_boxplot(fill = "lightblue", color = "darkblue", alpha = 0.5) +
+  theme_minimal() +
+  labs(
+    title = "Employment Distribution by Wage Category",
+    x = "Wage Category",
+    y = "Number of Employees"
+  ) +
+  theme(
+    plot.title = element_text(size = 14, face = "bold"),
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  ) +
+  scale_y_continuous(labels = scales::comma)
+
+```
+
+**5. Primary Statistical Testing**
+
+Despite the normality violation, we proceeded with one-way ANOVA due to its robustness:
+
+* F(2, 134) = 0.518
+* p-value = 0.597
+
+The Tukey's HSD post-hoc analysis provided detailed comparisons:
+
+* Medium wage - Low wage difference: 1590.74 [95% CI: -2586.33, 5767.80, p = 0.64]
+* High wage - Low wage difference: 2480.61 [95% CI: -5453.48, 10414.70, p = 0.74]
+* High wage - Medium wage difference: 889.88 [95% CI: -6771.12, 8550.87, p = 0.96]
+
+**6. Robustness Analysis**
+
+Given the normality violation, we conducted a non-parametric Kruskal-Wallis test as a robustness check. The results (chi-squared = 1.037, df = 2, p-value = 0.595) align with our ANOVA findings, providing additional confidence in our conclusions.
+
+
+```{r echo=FALSE}
+# Kruskal-Wallis test
+
+kruskal_test <- kruskal.test(annual_avg_emplvl ~ wage_category, data = wage_summary)
+
+kruskal_test
+```
+The comprehensive analysis, incorporating multiple statistical approaches and robust testing methods, consistently indicates no statistically significant differences in employment levels across wage categories, despite observed variations in mean employment figures. This thorough examination strengthens the reliability of our findings and provides a solid foundation for policy recommendations.
+
+
+# 4. Discussion
+
+Based on our comprehensive statistical analysis using multiple inference methods, we find no statistically significant differences in employment levels across wage categories in Madison's industries (ANOVA: p-value = 0.597, Kruskal-Wallis: p-value = 0.0907). While high-wage industries show larger average employment sizes (mean: 5,179, 95% CI: [3,876, 6,482]) compared to medium-wage (mean: 4,289, 95% CI: [3,124, 5,454]) and low-wage industries (mean: 2,698, 95% CI: [1,842, 3,554]), these differences are not statistically significant at the conventional 5% level.
+
+Looking at our statistical results in simple terms:
+
+- The ANOVA test (p-value = 0.597) suggests that there isn't strong evidence of significant differences in employment levels across wage categories. 
+
+- When comparing specific pairs of wage categories, we found that:
+  * Medium-wage industries employ about 1,591 more workers than low-wage industries
+
+  * High-wage industries employ about 2,481 more workers than low-wage industries
+
+  * High-wage industries employ about 890 more workers than medium-wage industries
+However, none of these differences are statistically significant.
+
+Limitations of our analysis include:
+
+  1. Data Constraints:
+    - Our analysis doesn't account for part-time versus full-time employment
+    - We lack information about employee benefits and total compensation
+    - The data doesn't show employment changes over time
+
+  2. Technical Limitations:
+    - The non-normal distribution of employment levels across industries
+    - Potential seasonal variations in employment that our annual averages don't capture
+    - The broad categorization of wages might mask important within-category variations
+
+Future Research Recommendations:
+
+  1. Investigate the relationship between industry size and wage levels
+  2. Analyze how employment patterns have changed over multiple years
+  3. Study the impact of education and skill requirements on wage levels
+  4. Examine the role of industry growth rates in determining wage levels
+
+While our analysis provides valuable insights into Madison's labor market structure, it also highlights the complexity of wage and employment relationships. Understanding these patterns could help inform policies aimed at reducing wage inequality while promoting economic growth in the region.
